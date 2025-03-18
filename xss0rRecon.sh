@@ -347,6 +347,20 @@ fi
    # Step 3: Install Go
 show_progress "Installing Go 1.22.5"
 
+# Check for existing Go 1.22.5 installation
+if command -v go &> /dev/null; then
+    CURRENT_GO_VERSION=$(go version | awk '{print $3}')
+    if [[ "$CURRENT_GO_VERSION" == "go1.22.5" ]]; then
+        echo -e "${BOLD_BLUE}Go 1.22.5 is already installed. Skipping installation.${NC}"
+        return 0
+    elif [[ "$(echo -e "$CURRENT_GO_VERSION\ngo1.22.5" | sort -V | tail -n1)" == "go1.22.5" ]]; then
+        echo -e "${YELLOW}Found newer Go version ($CURRENT_GO_VERSION). Preserving existing installation.${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}Found older Go version ($CURRENT_GO_VERSION). Proceeding with upgrade...${NC}"
+    fi
+fi
+
 # Step 1: Remove any existing Go installations
 echo "Removing existing Go installations and cache..."
 sudo apt remove --purge golang -y
@@ -368,14 +382,33 @@ wget https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
 echo "Installing Go 1.22.5..."
 sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
 
+# Verify installed version
+INSTALLED_GO_VERSION=$(/usr/local/go/bin/go version | awk '{print $3}')
+if [[ "$INSTALLED_GO_VERSION" != "go1.22.5" ]]; then
+    echo -e "${RED}Failed to install Go 1.22.5. Detected version: $INSTALLED_GO_VERSION${NC}"
+    handle_error "Go installation version check"
+else
+    echo -e "${BOLD_BLUE}Successfully installed Go $INSTALLED_GO_VERSION${NC}"
+fi
+
 # Clean up the downloaded tarball
 sudo rm -r go1.22.5.linux-amd64.tar.gz
 
 # Step 3: Set up environment variables
 echo "Configuring Go environment..."
-echo 'export PATH=$PATH:/usr/local/go/bin' | sudo tee -a /etc/profile.d/go.sh
-echo 'export GOPATH=$HOME/go' | sudo tee -a /etc/profile.d/go.sh
-echo 'export PATH=$PATH:$GOPATH/bin' | sudo tee -a /etc/profile.d/go.sh
+# Configure Go environment variables
+export PATH=$PATH:/usr/local/go/bin
+export GOPATH=$HOME/go
+export PATH=$PATH:$GOPATH/bin
+
+# Add to shell profile
+for SHELL_PROFILE in ~/.bashrc ~/.zshrc; do
+    echo -e "\n# Go Environment Variables" >> "$SHELL_PROFILE"
+    echo "export PATH=\$PATH:/usr/local/go/bin" >> "$SHELL_PROFILE"
+    echo "export GOPATH=\$HOME/go" >> "$SHELL_PROFILE"
+    echo "export PATH=\$PATH:\$GOPATH/bin" >> "$SHELL_PROFILE"
+    source "$SHELL_PROFILE"
+done
 
 # Apply environment changes immediately
 source /etc/profile.d/go.sh
@@ -749,11 +782,22 @@ show_progress "Installing Katana"
 
 # Attempt to install Katana using 'go install'
 echo -e "${BOLD_WHITE}Attempting to install Katana using 'go install'...${NC}"
-if go install github.com/projectdiscovery/katana/cmd/katana@latest; then
-    echo -e "${BOLD_BLUE}Katana installed successfully via 'go install'.${NC}"
-
-    # Copy the binary to /usr/local/bin for system-wide access
-    sudo cp "$(go env GOPATH)/bin/katana" /usr/local/bin/
+# Version check for Katana
+current_katana_version=$(katana --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo '0.0.0')
+desired_katana_version="0.0.1"
+if [[ "$(printf "%s\n%s" "$current_katana_version" "$desired_katana_version" | sort -V | tail -n1)" != "$desired_katana_version" ]]; then
+    if go install github.com/projectdiscovery/katana/cmd/katana@latest; then
+        echo -e "${BOLD_BLUE}Katana updated successfully via 'go install'.${NC}"
+        # Copy the binary to /usr/local/bin for system-wide access
+        sudo cp "$(go env GOPATH)/bin/katana" /usr/local/bin/
+    else
+        echo -e "${RED}Failed to update Katana via 'go install'${NC}"
+        exit 1
+    fi
+else
+    echo -e "${BOLD_BLUE}Katana $current_katana_version already installed. Skipping update.${NC}"
+    return 0
+fi
 else
     echo -e "${YELLOW}Failed to install Katana via 'go install'. Attempting to install from source...${NC}"
 
@@ -764,7 +808,19 @@ else
     # Build the Katana binary
     if go build; then
         chmod +x katana
+        if [ -f "/usr/local/bin/katana" ]; then
+    existing_hash=$(shasum -a 256 "/usr/local/bin/katana" | cut -d' ' -f1)
+    current_hash=$(shasum -a 256 "katana" | cut -d' ' -f1)
+    if [ "$existing_hash" != "$current_hash" ]; then
         sudo mv katana /usr/local/bin/
+        echo "Updated katana in /usr/local/bin"
+    else
+        echo "katana already exists with latest version - skipping update"
+    fi
+else
+    sudo mv katana /usr/local/bin/
+    echo "Installed katana to /usr/local/bin"
+fi
         echo -e "${BOLD_BLUE}Katana installed successfully from source.${NC}"
         cd ../../..
         sudo rm -rf katana
@@ -798,11 +854,22 @@ show_progress "Installing Gau"
 
 # Attempt to install Gau using 'go install'
 echo -e "${BOLD_WHITE}Attempting to install Gau using 'go install'...${NC}"
-if go install github.com/lc/gau/v2/cmd/gau@latest; then
-    echo -e "${BOLD_BLUE}Gau installed successfully via 'go install'.${NC}"
-
-    # Copy the binary to /usr/local/bin for system-wide access
-    sudo cp "$(go env GOPATH)/bin/gau" /usr/local/bin/
+# Version check for Gau
+current_gau_version=$(gau --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo '0.0.0')
+desired_gau_version="2.1.2"
+if [[ "$(printf "%s\n%s" "$current_gau_version" "$desired_gau_version" | sort -V | tail -n1)" != "$desired_gau_version" ]]; then
+    if go install github.com/lc/gau/v2/cmd/gau@latest; then
+        echo -e "${BOLD_BLUE}Gau updated successfully via 'go install'.${NC}"
+        # Copy the binary to /usr/local/bin for system-wide access
+        sudo cp "$(go env GOPATH)/bin/gau" /usr/local/bin/
+    else
+        echo -e "${RED}Failed to update Gau via 'go install'${NC}"
+        exit 1
+    fi
+else
+    echo -e "${BOLD_BLUE}Gau $current_gau_version already installed. Skipping update.${NC}"
+    return 0
+fi
 else
     echo -e "${YELLOW}Failed to install Gau via 'go install'. Attempting to install from source...${NC}"
 
@@ -813,7 +880,19 @@ else
     # Build the Gau binary
     if go build; then
         chmod +x gau
+        if [ -f "/usr/local/bin/gau" ]; then
+    existing_hash=$(shasum -a 256 "/usr/local/bin/gau" | cut -d' ' -f1)
+    current_hash=$(shasum -a 256 "gau" | cut -d' ' -f1)
+    if [ "$existing_hash" != "$current_hash" ]; then
         sudo mv gau /usr/local/bin/
+        echo "Updated gau in /usr/local/bin"
+    else
+        echo "gau already exists with latest version - skipping update"
+    fi
+else
+    sudo mv gau /usr/local/bin/
+    echo "Installed gau to /usr/local/bin"
+fi
         echo -e "${BOLD_BLUE}Gau installed successfully from source.${NC}"
         cd ../../..
         sudo rm -rf gau
@@ -829,11 +908,22 @@ fi
 python3 -m venv .venv
 source .venv/bin/activate 
 echo -e "${BOLD_WHITE}Attempting to install Katana using 'go install'...${NC}"
-if go install github.com/projectdiscovery/katana/cmd/katana@latest; then
-    echo -e "${BOLD_BLUE}Katana installed successfully via 'go install'.${NC}"
-
-    # Copy the binary to /usr/local/bin for system-wide access
-    sudo cp "$(go env GOPATH)/bin/katana" /usr/local/bin/
+# Version check for Katana
+current_katana_version=$(katana --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo '0.0.0')
+desired_katana_version="0.0.1"
+if [[ "$(printf "%s\n%s" "$current_katana_version" "$desired_katana_version" | sort -V | tail -n1)" != "$desired_katana_version" ]]; then
+    if go install github.com/projectdiscovery/katana/cmd/katana@latest; then
+        echo -e "${BOLD_BLUE}Katana updated successfully via 'go install'.${NC}"
+        # Copy the binary to /usr/local/bin for system-wide access
+        sudo cp "$(go env GOPATH)/bin/katana" /usr/local/bin/
+    else
+        echo -e "${RED}Failed to update Katana via 'go install'${NC}"
+        exit 1
+    fi
+else
+    echo -e "${BOLD_BLUE}Katana $current_katana_version already installed. Skipping update.${NC}"
+    return 0
+fi
 else
     echo -e "${YELLOW}Failed to install Katana via 'go install'. Attempting to install from source...${NC}"
 
@@ -844,7 +934,19 @@ else
     # Build the Katana binary
     if go build; then
         chmod +x katana
+        if [ -f "/usr/local/bin/katana" ]; then
+    existing_hash=$(shasum -a 256 "/usr/local/bin/katana" | cut -d' ' -f1)
+    current_hash=$(shasum -a 256 "katana" | cut -d' ' -f1)
+    if [ "$existing_hash" != "$current_hash" ]; then
         sudo mv katana /usr/local/bin/
+        echo "Updated katana in /usr/local/bin"
+    else
+        echo "katana already exists with latest version - skipping update"
+    fi
+else
+    sudo mv katana /usr/local/bin/
+    echo "Installed katana to /usr/local/bin"
+fi
         echo -e "${BOLD_BLUE}Katana installed successfully from source.${NC}"
         cd ../../..
         sudo rm -rf katana
@@ -860,11 +962,21 @@ fi
 python3 -m venv .venv
 source .venv/bin/activate 
 echo -e "${BOLD_WHITE}Attempting to install Waybackurls using 'go install'...${NC}"
-if go install github.com/tomnomnom/waybackurls@latest; then
-    echo -e "${BOLD_BLUE}Waybackurls installed successfully via 'go install'.${NC}"
-
-    # Copy the binary to /usr/local/bin for system-wide access
-    sudo cp "$(go env GOPATH)/bin/waybackurls" /usr/local/bin/
+# Version check for Waybackurls
+current_wayback_version=$(waybackurls --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo '0.0.0')
+desired_wayback_version="0.1.0"
+if [[ "$(printf "%s\n%s" "$current_wayback_version" "$desired_wayback_version" | sort -V | tail -n1)" != "$desired_wayback_version" ]]; then
+    if go install github.com/tomnomnom/waybackurls@latest; then
+        echo -e "${BOLD_BLUE}Waybackurls updated successfully via 'go install'.${NC}"
+        sudo cp "$(go env GOPATH)/bin/waybackurls" /usr/local/bin/
+    else
+        echo -e "${RED}Failed to update Waybackurls via 'go install'${NC}"
+        exit 1
+    fi
+else
+    echo -e "${BOLD_BLUE}Waybackurls $current_wayback_version already installed. Skipping update.${NC}"
+    return 0
+fi
 else
     echo -e "${YELLOW}Failed to install Waybackurls via 'go install'. Attempting to install from source...${NC}"
 
